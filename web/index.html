@@ -1,0 +1,403 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Uncounted ledger</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,300..900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/6.13.4/ethers.umd.min.js"></script>
+<style>
+:root {
+  --sky: #E4E7EA;
+  --panel: #F3F5F6;
+  --ink: #1F2A33;
+  --ink-soft: #56636E;
+  --rule: #C6CCD2;
+  --t1: #FFD84A; --t2: #FF8A2A; --t3: #D9411B; --t4: #7E1A12;
+  --verified: #17695C; --disputed: #A3221B; --pending: #8A5A00; --superseded: #6F7A84;
+  --focus: #2457C5;
+  --radius: 6px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --sky: #151B20; --panel: #1D252C; --ink: #E3E8EC; --ink-soft: #9AA6B0; --rule: #34404A;
+    --verified: #4FB8A4; --disputed: #F0776E; --pending: #E0B04F; --superseded: #8C98A2; --focus: #8AB0FF;
+  }
+}
+:root[data-theme="dark"] {
+  --sky: #151B20; --panel: #1D252C; --ink: #E3E8EC; --ink-soft: #9AA6B0; --rule: #34404A;
+  --verified: #4FB8A4; --disputed: #F0776E; --pending: #E0B04F; --superseded: #8C98A2; --focus: #8AB0FF;
+}
+
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0; background: var(--sky); color: var(--ink);
+  font-family: "Archivo", system-ui, sans-serif; font-variation-settings: "wdth" 100;
+  font-size: 16px; line-height: 1.5; font-feature-settings: "tnum" 1;
+}
+a { color: inherit; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+button, input, textarea { font: inherit; color: inherit; }
+
+.shell { max-width: 1240px; margin: 0 auto; padding: 0 16px 64px; }
+
+header.top {
+  display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between;
+  gap: 8px 24px; padding: 28px 0 20px; border-bottom: 2px solid var(--ink);
+}
+.wordmark {
+  font-size: 2.25rem; line-height: 1; margin: 0;
+  font-variation-settings: "wdth" 125; font-weight: 850; letter-spacing: -0.01em;
+}
+.tagline { margin: 6px 0 0; color: var(--ink-soft); max-width: 46ch; }
+.chain { font-size: 0.875rem; color: var(--ink-soft); text-align: right; }
+.chain strong { color: var(--ink); font-weight: 600; }
+
+.layout { display: grid; grid-template-columns: minmax(300px, 400px) 1fr; gap: 28px; padding-top: 24px; }
+@media (max-width: 860px) { .layout { grid-template-columns: 1fr; } }
+
+/* record list */
+.list h2, .detail h2 { font-size: 1rem; font-weight: 700; margin: 0 0 10px; }
+.scale-note { font-size: 0.8125rem; color: var(--ink-soft); margin: -6px 0 12px; }
+ol.records { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--rule); }
+.rec {
+  display: block; width: 100%; text-align: left; background: none; border: 0;
+  border-bottom: 1px solid var(--rule); padding: 14px 10px 14px 12px; cursor: pointer;
+  border-left: 4px solid transparent;
+}
+.rec:hover { background: color-mix(in srgb, var(--panel) 70%, transparent); }
+.rec[aria-current="true"] { background: var(--panel); border-left-color: var(--ink); }
+.rec > span { display: block; }
+.rec-head { display: flex !important; justify-content: space-between; gap: 12px; align-items: baseline; }
+.rec-region { font-weight: 650; }
+.rec-meta { font-size: 0.8125rem; color: var(--ink-soft); }
+.band { position: relative; height: 12px; margin: 10px 0 6px; background: color-mix(in srgb, var(--rule) 45%, transparent); border-radius: 2px; }
+.band span.fill { position: absolute; top: 0; bottom: 0; border-radius: 2px;
+  background: linear-gradient(90deg, var(--t1), var(--t2) 45%, var(--t3) 80%, var(--t4)); }
+.band span.med { position: absolute; top: -3px; bottom: -3px; width: 3px; margin-left: -1px; background: var(--ink); }
+.rec-range { font-size: 0.875rem; }
+
+.status { font-size: 0.8125rem; font-weight: 650; padding: 1px 8px; border-radius: 999px; white-space: nowrap; border: 1.5px solid currentColor; }
+.s-Verified { color: var(--verified); }
+.s-Pending { color: var(--pending); border-style: dashed; }
+.s-Disputed { color: #fff; background: var(--disputed); border-color: var(--disputed); }
+.s-Superseded { color: var(--superseded); text-decoration: line-through; }
+
+/* detail */
+.detail { min-width: 0; }
+.figure-row { display: flex; flex-wrap: wrap; gap: 8px 28px; align-items: flex-end; margin-bottom: 16px; }
+.big {
+  font-variation-settings: "wdth" 118; font-weight: 820; font-size: clamp(2.25rem, 5vw, 3.5rem);
+  line-height: 0.95; letter-spacing: -0.015em; margin: 0;
+}
+.big small { font-size: 0.42em; font-weight: 600; font-variation-settings: "wdth" 100; letter-spacing: 0; }
+.range-text { color: var(--ink-soft); margin: 4px 0 0; }
+.detail-title { font-size: 1.375rem; font-weight: 700; margin: 0 0 2px; font-variation-settings: "wdth" 108; }
+.detail-sub { color: var(--ink-soft); margin: 0 0 18px; }
+
+#map { height: 340px; border-radius: var(--radius); border: 1px solid var(--rule); background: var(--panel); }
+.map-key { display: flex; align-items: center; gap: 10px; font-size: 0.8125rem; color: var(--ink-soft); margin: 6px 0 22px; }
+.map-key i { display: inline-block; width: 120px; height: 8px; border-radius: 2px;
+  background: linear-gradient(90deg, var(--t1), var(--t2), var(--t3), var(--t4)); }
+
+.cols { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+@media (max-width: 640px) { .cols { grid-template-columns: 1fr; } }
+section.block { border-top: 1px solid var(--rule); padding-top: 14px; margin-top: 8px; }
+dl.facts { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; margin: 0; font-size: 0.9375rem; }
+dl.facts dt { color: var(--ink-soft); }
+dl.facts dd { margin: 0; overflow-wrap: anywhere; }
+table.val { border-collapse: collapse; width: 100%; font-size: 0.9375rem; }
+table.val th, table.val td { text-align: right; padding: 4px 6px; border-bottom: 1px solid var(--rule); }
+table.val th:first-child, table.val td:first-child { text-align: left; }
+table.val th { font-weight: 600; color: var(--ink-soft); }
+ul.notes { margin: 0; padding-left: 18px; color: var(--ink-soft); font-size: 0.9375rem; max-width: 70ch; }
+ul.notes li + li { margin-top: 4px; }
+
+/* the verify panel: the one loud element */
+.verify { margin-top: 28px; background: var(--panel); border: 2px solid var(--ink); border-radius: var(--radius); padding: 20px; }
+.verify h2 { font-size: 1.25rem; font-variation-settings: "wdth" 112; margin: 0 0 4px; }
+.verify p.lead { margin: 0 0 16px; color: var(--ink-soft); max-width: 62ch; }
+.hashes { display: grid; gap: 10px; }
+.hash-row { display: grid; grid-template-columns: 9.5em 1fr; gap: 12px; align-items: baseline; }
+@media (max-width: 560px) { .hash-row { grid-template-columns: 1fr; gap: 2px; } }
+.hash-row .lbl { font-size: 0.875rem; color: var(--ink-soft); }
+.hash { font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; font-size: 0.8125rem; overflow-wrap: anywhere; }
+.hash b { font-weight: 400; background: var(--t3); color: #fff; border-radius: 2px; }
+.verdict { margin: 16px 0 0; font-weight: 700; font-size: 1.0625rem; display: flex; gap: 10px; align-items: center; }
+.verdict.ok { color: var(--verified); }
+.verdict.bad { color: var(--disputed); }
+.verdict svg { flex: none; }
+.tamper { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; margin-top: 18px; padding-top: 16px; border-top: 1px dashed var(--rule); }
+.tamper label { font-size: 0.9375rem; }
+.tamper input { width: 11em; padding: 6px 8px; border: 1px solid var(--rule); border-radius: 4px; background: var(--sky); }
+.btn { padding: 7px 14px; border-radius: 4px; border: 1.5px solid var(--ink); background: var(--ink); color: var(--sky); font-weight: 600; cursor: pointer; }
+.btn.ghost { background: transparent; color: var(--ink); }
+.btn:disabled { opacity: 0.5; cursor: default; }
+.file-check { font-size: 0.9375rem; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.file-check input { max-width: 100%; }
+
+.empty, .error { padding: 18px; border-radius: var(--radius); background: var(--panel); border: 1px solid var(--rule); max-width: 70ch; }
+.error { border-color: var(--disputed); }
+.error code, .empty code { font-size: 0.875rem; }
+.leaflet-container { font: inherit; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+</style>
+</head>
+<body>
+<div class="shell">
+  <header class="top">
+    <div>
+      <h1 class="wordmark">Uncounted</h1>
+      <p class="tagline">Satellite estimates of the emissions no inventory reports: wildfires and war. Every figure is a range, every report is hashed on chain, and anyone can check it.</p>
+    </div>
+    <div class="chain" id="chain">Connecting to the ledger…</div>
+  </header>
+
+  <main class="layout">
+    <nav class="list" aria-label="Records">
+      <h2>Records on the ledger</h2>
+      <p class="scale-note">Bands show the 5th to 95th percentile on a shared log scale. The dark tick is the median.</p>
+      <ol class="records" id="records"></ol>
+    </nav>
+    <article class="detail" id="detail" aria-live="polite"></article>
+  </main>
+</div>
+
+<script>
+const STATUS = ["Pending", "Verified", "Disputed", "Superseded"];
+const KIND = ["Wildfire", "Conflict", "Other"];
+const state = { records: [], selected: null, deployment: null, ledger: null, map: null, layer: null };
+
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+function tonnes(n) {
+  n = Number(n);
+  if (n >= 1e6) return { v: (n / 1e6).toLocaleString(undefined, { maximumSignificantDigits: 3 }), u: "million t CO2e" };
+  if (n >= 1e3) return { v: (n / 1e3).toLocaleString(undefined, { maximumSignificantDigits: 3 }), u: "thousand t CO2e" };
+  return { v: n.toLocaleString(), u: "t CO2e" };
+}
+const fmtT = (n) => { const t = tonnes(n); return `${t.v} ${t.u}`; };
+const short = (a) => a ? `${a.slice(0, 6)}…${a.slice(-4)}` : "";
+const day = (unix) => new Date(Number(unix) * 1000).toISOString().slice(0, 10);
+
+function reportUrl(uri) {
+  if (/^(https?:|ipfs:)/.test(uri)) return uri.replace(/^ipfs:\/\//, "https://ipfs.io/ipfs/");
+  return "../" + uri.replace(/^\/+/, "");
+}
+
+async function sha256Hex(buf) {
+  const d = await crypto.subtle.digest("SHA-256", buf);
+  return "0x" + [...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+async function boot() {
+  let dep;
+  try {
+    const r = await fetch("deployment.json", { cache: "no-store" });
+    if (!r.ok) throw new Error();
+    dep = await r.json();
+  } catch {
+    return showError("No deployment found.", "Deploy the contract first: <code>npx hardhat deploy-ledger --network localhost</code>. It writes <code>web/deployment.json</code>. Then serve the repo root, for example <code>python3 -m http.server 8000</code>, and open <code>/web/</code>.");
+  }
+  state.deployment = dep;
+  try {
+    const provider = new ethers.JsonRpcProvider(dep.rpcUrl, undefined, { staticNetwork: true });
+    state.ledger = new ethers.Contract(dep.address, dep.abi, provider);
+    const [count, quorum] = await Promise.all([state.ledger.recordCount(), state.ledger.quorum()]);
+    $("#chain").innerHTML = `Network <strong>${esc(dep.network)}</strong>, chain ${dep.chainId}<br>
+      Ledger <strong title="${esc(dep.address)}">${short(dep.address)}</strong>, ${quorum} verifier${quorum == 1n ? "" : "s"} to verify`;
+    const n = Number(count);
+    const ids = Array.from({ length: n }, (_, i) => i + 1);
+    state.records = await Promise.all(ids.map(async (id) => {
+      const [r, s] = await Promise.all([state.ledger.getRecord(id), state.ledger.status(id)]);
+      return { id, r, status: STATUS[Number(s)] };
+    }));
+  } catch (e) {
+    return showError(`Can't reach the chain at ${esc(dep.rpcUrl)}.`, "Start a local node with <code>npx hardhat node</code>, or point <code>rpcUrl</code> in <code>web/deployment.json</code> at a public RPC for the network the ledger lives on.");
+  }
+  renderList();
+  if (state.records.length) {
+    const firstActive = state.records.find((x) => x.status !== "Superseded") || state.records[0];
+    select(firstActive.id);
+  } else {
+    $("#detail").innerHTML = `<div class="empty">The ledger is empty. Publish a report with <code>npx hardhat publish-report --report reports/&lt;case&gt;.json --network ${esc(dep.network)}</code>.</div>`;
+  }
+}
+
+function showError(title, body) {
+  $("#chain").textContent = "Not connected";
+  $("#records").innerHTML = "";
+  $("#detail").innerHTML = `<div class="error"><strong>${title}</strong><p>${body}</p></div>`;
+}
+
+function renderList() {
+  const lo = Math.min(...state.records.map((x) => Math.max(1, Number(x.r.tco2eLow))));
+  const hi = Math.max(...state.records.map((x) => Math.max(10, Number(x.r.tco2eHigh))));
+  const a = Math.log10(lo) - 0.15, b = Math.log10(hi) + 0.15;
+  const pos = (v) => ((Math.log10(Math.max(1, Number(v))) - a) / (b - a)) * 100;
+  $("#records").innerHTML = state.records.map(({ id, r, status }) => {
+    const l = pos(r.tco2eLow), m = pos(r.tco2eCentral), h = pos(r.tco2eHigh);
+    return `<li><button class="rec" data-id="${id}" aria-current="${state.selected === id}">
+      <span class="rec-head"><span class="rec-region">${esc(r.region)}</span><span class="status s-${status}">${status}</span></span>
+      <span class="rec-meta">#${id}, ${KIND[Number(r.kind)]}, ${day(r.periodStart)} to ${day(r.periodEnd)}</span>
+      <span class="band" aria-hidden="true"><span class="fill" style="left:${l}%;width:${Math.max(0.8, h - l)}%"></span><span class="med" style="left:${m}%"></span></span>
+      <span class="rec-range">${fmtT(r.tco2eLow)} to ${fmtT(r.tco2eHigh)}</span>
+    </button></li>`;
+  }).join("");
+  document.querySelectorAll(".rec").forEach((b) => b.addEventListener("click", () => select(Number(b.dataset.id))));
+}
+
+async function select(id) {
+  state.selected = id;
+  document.querySelectorAll(".rec").forEach((b) => b.setAttribute("aria-current", String(Number(b.dataset.id) === id)));
+  const { r, status } = state.records.find((x) => x.id === id);
+  const central = tonnes(r.tco2eCentral);
+  const kind = KIND[Number(r.kind)];
+  const explorer = state.deployment.explorer;
+
+  $("#detail").innerHTML = `
+    <h2 class="detail-title">${esc(r.region)}</h2>
+    <p class="detail-sub">${kind}, ${day(r.periodStart)} to ${day(r.periodEnd)}. Record #${id}, <span class="status s-${status}">${status}</span></p>
+    <div class="figure-row">
+      <div>
+        <p class="big">${central.v} <small>${central.u}</small></p>
+        <p class="range-text">Median estimate. 90% range ${fmtT(r.tco2eLow)} to ${fmtT(r.tco2eHigh)}.</p>
+      </div>
+    </div>
+    <div id="map" role="img" aria-label="Map of fire hotspots for this record"></div>
+    <div class="map-key"><i></i><span id="mapkey">Fire radiative power per grid cell, low to high</span></div>
+    <div id="report-body"><p class="rec-meta">Loading report…</p></div>
+    <section class="verify" aria-labelledby="vh">
+      <h2 id="vh">Check this report against the chain</h2>
+      <p class="lead">Your browser downloads the full report and hashes it. If a single character had been changed after publishing, the hash would not match the one stored on chain.</p>
+      <div class="hashes">
+        <div class="hash-row"><span class="lbl">Stored on chain</span><span class="hash" id="h-chain">${r.reportHash}</span></div>
+        <div class="hash-row"><span class="lbl">This file hashes to</span><span class="hash" id="h-file">…</span></div>
+      </div>
+      <p class="verdict" id="verdict"></p>
+      <div class="tamper">
+        <label for="tamper-val">Change the median to</label>
+        <input id="tamper-val" type="number" min="0" step="1000" value="${Math.round(Number(r.tco2eCentral) * 0.5)}">
+        <button class="btn" id="tamper-btn">Tamper and re-check</button>
+        <button class="btn ghost" id="reset-btn">Restore original</button>
+        <label class="file-check">or check a file you have: <input type="file" id="file-in" accept=".json,application/json"></label>
+      </div>
+    </section>
+    <section class="block">
+      <dl class="facts">
+        <dt>Method</dt><dd>${esc(r.methodVersion)}</dd>
+        <dt>Data hash</dt><dd class="hash">${r.dataHash}</dd>
+        <dt>Published by</dt><dd>${short(r.publisher)} on ${new Date(Number(r.publishedAt) * 1000).toISOString().slice(0, 16).replace("T", " ")} UTC</dd>
+        <dt>Verification</dt><dd>${r.attestations} reproduced the exact hash, ${r.disputes} disputed</dd>
+        ${r.supersedes != 0n ? `<dt>Corrects</dt><dd><a href="#" data-goto="${r.supersedes}">record #${r.supersedes}</a></dd>` : ""}
+        ${r.supersededBy != 0n ? `<dt>Corrected by</dt><dd><a href="#" data-goto="${r.supersededBy}">record #${r.supersededBy}</a></dd>` : ""}
+        <dt>Report</dt><dd><a href="${esc(reportUrl(r.reportURI))}" target="_blank" rel="noopener">${esc(r.reportURI)}</a></dd>
+        ${explorer ? `<dt>Contract</dt><dd><a href="${esc(explorer)}/address/${state.deployment.address}" target="_blank" rel="noopener">view on explorer</a></dd>` : ""}
+      </dl>
+    </section>`;
+  document.querySelectorAll("[data-goto]").forEach((a) => a.addEventListener("click", (e) => { e.preventDefault(); select(Number(a.dataset.goto)); }));
+
+  let bytes = null;
+  try {
+    const res = await fetch(reportUrl(r.reportURI), { cache: "no-store" });
+    if (!res.ok) throw new Error(res.status);
+    bytes = new Uint8Array(await res.arrayBuffer());
+  } catch {
+    $("#report-body").innerHTML = `<div class="error">The report at <code>${esc(r.reportURI)}</code> could not be downloaded, so it can't be checked. Serve the repo root so <code>reports/</code> is reachable.</div>`;
+    $("#h-file").textContent = "not available";
+    return;
+  }
+  const original = bytes;
+  const report = JSON.parse(new TextDecoder().decode(bytes));
+  renderReport(report, kind);
+  drawMap(report);
+  await checkBytes(original, r.reportHash);
+
+  $("#tamper-btn").addEventListener("click", async () => {
+    const v = Math.max(0, Math.round(Number($("#tamper-val").value) || 0));
+    const text = new TextDecoder().decode(original);
+    const tampered = text.replace(/("result":\{[^]*?"tco2e":\{"p05":\d+,"p50":)\d+/, `$1${v}`);
+    await checkBytes(new TextEncoder().encode(tampered), r.reportHash, `Median changed to ${v.toLocaleString()} t. `);
+  });
+  $("#reset-btn").addEventListener("click", () => checkBytes(original, r.reportHash));
+  $("#file-in").addEventListener("change", async (e) => {
+    const f = e.target.files[0];
+    if (f) await checkBytes(new Uint8Array(await f.arrayBuffer()), r.reportHash, `Checked ${f.name}. `);
+  });
+}
+
+async function checkBytes(bytes, chainHash, prefix = "") {
+  const h = await sha256Hex(bytes);
+  const out = [...h].map((c, i) => (c === chainHash[i] ? c : `<b>${c}</b>`)).join("");
+  $("#h-file").innerHTML = out;
+  const ok = h === chainHash;
+  const v = $("#verdict");
+  v.className = "verdict " + (ok ? "ok" : "bad");
+  v.innerHTML = ok
+    ? `<svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="9" fill="currentColor"/><path d="M5.5 10.5l3 3 6-7" stroke="#fff" stroke-width="2" fill="none"/></svg>${prefix}Hashes match. This is exactly the report that was published.`
+    : `<svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="9" fill="currentColor"/><path d="M6 6l8 8M14 6l-8 8" stroke="#fff" stroke-width="2"/></svg>${prefix}Hashes differ. This file is not the published report.`;
+}
+
+function renderReport(rep, kind) {
+  const d = rep.data, res = rep.result, att = rep.attribution, cc = rep.crosscheck;
+  const gas = res.by_gas_median_t;
+  let html = `<div class="cols">
+    <section class="block"><h2>What was measured</h2><dl class="facts">
+      <dt>Source</dt><dd>${esc(d.provider)}, ${esc(d.products.join(", "))}</dd>
+      <dt>Detections</dt><dd>${d.detections_in_period.toLocaleString()} in the period${att ? `, ${d.rows_after_filters.toLocaleString()} including baseline years` : ""}</dd>
+      <dt>Fire power</dt><dd>${Number(d.frp_sum_mw).toLocaleString()} MW summed over detections</dd>
+      <dt>Dry matter burned</dt><dd>about ${fmtT(res.dry_matter_burned_median_t).replace(" CO2e", "")}</dd>
+      <dt>By gas (median)</dt><dd>CO2 ${fmtT(gas.CO2).replace(" CO2e","")}, CH4 ${Number(gas.CH4).toLocaleString()} t, N2O ${Number(gas.N2O).toLocaleString()} t</dd>
+    </dl></section>`;
+  if (att) {
+    html += `<section class="block"><h2>Above the peacetime baseline</h2>
+      <p class="rec-meta" style="margin-top:0">A model trained on ${att.baseline_years[0]} to ${att.baseline_years.at(-1)} predicts normal fire activity. Each row hides one peacetime year and predicts it.</p>
+      <table class="val"><thead><tr><th>Held-out year</th><th>Observed</th><th>Predicted</th><th>Ratio</th></tr></thead><tbody>
+      ${att.peacetime_validation.map((v) => `<tr><td>${v.year}</td><td>${Number(v.observed_frp_mw).toLocaleString()}</td><td>${Number(v.expected_frp_mw).toLocaleString()}</td><td>${v.ratio}</td></tr>`).join("")}
+      </tbody></table>
+      <p class="rec-meta">In the conflict period, about ${Math.round(att.excess_share_central * 100)}% of observed fire power was above the baseline.</p></section>`;
+  } else {
+    html += `<section class="block"><h2>How it's estimated</h2><p class="rec-meta" style="margin-top:0">Satellite fire radiative power is integrated over time, converted to burned biomass, then to gases with published emission factors. 20,000 Monte Carlo draws give the range.</p>`;
+    if (cc) html += `<p><strong>Independent cross-check</strong> from burned area: ${fmtT(cc.tco2e.p05)} to ${fmtT(cc.tco2e.p95)}.</p>`;
+    html += `</section>`;
+  }
+  html += `</div><section class="block"><h2>Limits of this estimate</h2><ul class="notes">${rep.notes.map((n) => `<li>${esc(n)}</li>`).join("")}</ul></section>`;
+  $("#report-body").innerHTML = html;
+}
+
+function drawMap(rep) {
+  if (state.map) { state.map.remove(); state.map = null; }
+  const [w, s, e, n] = rep.data.bbox_wsen;
+  const map = L.map("map", { scrollWheelZoom: false, attributionControl: true });
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    maxZoom: 13, attribution: "&copy; OpenStreetMap contributors",
+  }).addTo(map);
+  const ink = getComputedStyle(document.documentElement).getPropertyValue("--ink").trim();
+  L.rectangle([[s, w], [n, e]], { color: ink, weight: 1.5, fill: false, dashArray: "5 5" }).addTo(map);
+  const key = rep.hotspots.length && "excess_frp_mw" in rep.hotspots[0] ? "excess_frp_mw" : "frp_mw";
+  $("#mapkey").textContent = key === "excess_frp_mw"
+    ? "Fire power above the peacetime baseline per grid cell, low to high"
+    : "Fire radiative power per grid cell, low to high";
+  const vals = rep.hotspots.map((h) => h[key]);
+  const max = Math.max(...vals, 1);
+  const ramp = ["--t1", "--t2", "--t3", "--t4"].map((v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim());
+  rep.hotspots.forEach((h) => {
+    const t = Math.sqrt(h[key] / max);
+    const color = ramp[Math.min(3, Math.floor(t * 3.999))];
+    L.circleMarker([h.lat, h.lon], { radius: 4 + 12 * t, color: "#00000055", weight: 1, fillColor: color, fillOpacity: 0.85 })
+      .bindTooltip(`${Number(h[key]).toLocaleString()} MW`).addTo(map);
+  });
+  map.fitBounds([[s, w], [n, e]], { padding: [12, 12] });
+  state.map = map;
+}
+
+boot();
+</script>
+</body>
+</html>

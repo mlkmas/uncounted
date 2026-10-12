@@ -1,0 +1,31 @@
+{
+  "cases": [
+    {
+      "case_id": "manavgat-2021",
+      "kind": "wildfire",
+      "region": "TR-07 Antalya, Manavgat area",
+      "description": "Manavgat wildfires, Antalya province, summer 2021. Antalya hosts COP31.",
+      "bbox": [31.2, 36.7, 31.9, 37.2],
+      "period_start": "2021-07-28",
+      "period_end": "2021-08-12",
+      "fuel_mix": {"extratropical_forest": 1.0},
+      "sources": ["VIIRS_SNPP_SP"],
+      "grid_deg": 0.05,
+      "crosscheck": null
+    },
+    {
+      "case_id": "kherson-2022",
+      "kind": "conflict",
+      "region": "UA-65 Kherson Oblast",
+      "description": "Fire activity above the peacetime baseline in Kherson Oblast, Mar to Oct 2022.",
+      "bbox": [32.0, 45.9, 35.3, 47.6],
+      "period_start": "2022-03-01",
+      "period_end": "2022-10-31",
+      "fuel_mix": {"agricultural_residue": 0.6, "savanna_grassland": 0.4},
+      "sources": ["VIIRS_SNPP_SP"],
+      "baseline_years": [2017, 2018, 2019, 2020, 2021],
+      "grid_deg": 0.25,
+      "crosscheck": null
+    }
+  ]
+}
