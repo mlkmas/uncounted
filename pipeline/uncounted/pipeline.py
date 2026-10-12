@@ -36,14 +36,25 @@ def _wildfire(case: Case, df: pd.DataFrame, rng) -> tuple[dict, dict, list]:
 def _conflict(case: Case, df: pd.DataFrame, rng) -> tuple[dict, dict, list, dict]:
     a = attribution.run(df, case)
     factors = emissions.sample_factors(case.fuel_mix, len(case.sources), MC_DRAWS, rng)
-    mult = rng.lognormal(a["log_ratio_mu"], a["log_ratio_sd"], MC_DRAWS)
-    excess = np.clip(a["observed_frp_mw"] - a["expected_frp_mw_raw"] * mult, 0, None)
+    war = np.array(a["conflict_excess"])
+    false = np.array(a["peacetime_false_excess"])
+    i = rng.integers(0, len(war), MC_DRAWS)
+    j = rng.integers(0, len(false), MC_DRAWS)
+    excess = np.clip(war[i] - false[j], 0, None)
     result = emissions.summarize(emissions.emissions_from_frp(excess, factors))
     result["excess_frp_mw"] = {k: sig(float(v)) for k, v in zip(("p05", "p50", "p95"), np.percentile(excess, [5, 50, 95]))}
     s, e = case.period_start, case.period_end
     n = int(((df["acq_date"] >= s) & (df["acq_date"] <= e)).sum())
-    inputs = {"detections_in_period": n, "frp_sum_mw": sig(a["observed_frp_mw"])}
+    inputs = {"detections_in_period": n, "frp_sum_mw": a["summary"]["observed_frp_mw"]}
     return result, inputs, a["hotspots"], a["summary"]
+
+
+def environment() -> dict:
+    """Library versions that produced the report. Recorded, so verifiers can match them."""
+    import platform
+    import sklearn
+    return {"python": platform.python_version(), "numpy": np.__version__,
+            "pandas": pd.__version__, "scikit-learn": sklearn.__version__}
 
 
 def build_report(case: Case, snapshot_path: Path) -> dict:
@@ -82,6 +93,7 @@ def build_report(case: Case, snapshot_path: Path) -> dict:
             "parameters": P.as_dict(),
             "monte_carlo": {"draws": MC_DRAWS, "seed": MC_SEED},
         },
+        "environment": environment(),
         "result": result,
         "hotspots": hotspots,
         "notes": _notes(case),
@@ -97,8 +109,10 @@ def _notes(case: Case) -> list:
     n = ["Estimates are ranges (5th to 95th percentile), not exact figures.",
          "Fire radiative power integration uses a simple duration model; see method.parameters."]
     if case.kind == "conflict":
-        n.append("Covers fire emissions above the peacetime baseline only. Military fuel use, munitions, "
-                 "infrastructure damage and reconstruction are not included, so this is a lower bound.")
+        n.append("Counts only fires whose pattern (place, season, time of day, intensity) is unlike peacetime fires. "
+                 "Extra burning that looks like normal burning is not counted.")
+        n.append("Military fuel use, munitions, infrastructure damage and reconstruction are not included, "
+                 "so this is a lower bound on the climate cost of the conflict.")
         n.append("Vegetation emission factors are used as a proxy for all fuels burned.")
     if "SYNTHETIC" in case.region:
         n.insert(0, "SYNTHETIC TEST DATA. Not a real-world estimate.")

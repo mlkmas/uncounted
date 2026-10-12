@@ -1,179 +1,166 @@
-"""Conflict attribution: how much fire activity is above what a peacetime year would show?
+"""Conflict attribution: which fires don't look like any peacetime fire?
 
-Same idea as excess mortality. A gradient-boosted model learns, from pre-conflict years,
-how much fire radiative power (FRP) each grid cell normally produces in each week of the
-year (agricultural burning seasons, recurring wildfires). For the conflict period:
+Method (AI pattern attribution, conservative):
+  1. Take every satellite fire detection in the conflict period, and every detection in
+     the same calendar window of the peacetime baseline years.
+  2. Train a gradient-boosted classifier to tell conflict-year fires from peacetime fires,
+     using where (lat, lon), when (day of year), day or night, and intensity (FRP).
+     Training is cross-fitted on spatial blocks: a fire is always scored by a model that
+     never saw its own block (neither conflict-year nor peacetime fires from that block).
+  3. The classifier's odds give a density ratio: how much more likely a fire like this is
+     in the conflict year than in peacetime. The share of each fire's FRP that peacetime
+     patterns cannot explain is max(0, 1 - 1/odds).
+  4. Noise floor: the exact same procedure is run on each peacetime year, treating it as
+     if it were the conflict year. Whatever it flags there is false excess and is
+     subtracted.
+Each step uses 5 leave-one-year-out reference sets, so the result comes with a spread.
 
-    excess FRP = observed FRP - expected FRP
+This measures fires that look different from peacetime fires. Extra burning in places and
+seasons where fires were already common is not counted, so the result is a lower bound.
 
-The model is checked with leave-one-year-out validation on the peacetime years: for each
-held-out year we compare observed with expected over the same calendar window. The spread
-of those ratios becomes the uncertainty of "expected" in the Monte Carlo.
-
-Only fire emissions are attributed. Military fuel use, munitions and reconstruction are
-not included, so the result is a lower bound on the climate cost of a conflict.
+A simpler cross-check (per-cell envelope) is reported alongside: fire power in each grid
+cell and month above the highest value that cell showed in the reference years.
 """
-from datetime import date, timedelta
-
 import numpy as np
 import pandas as pd
-from sklearn.ensemble import HistGradientBoostingRegressor
+from sklearn.ensemble import HistGradientBoostingClassifier
 
 from .canonical import sig
 
-MODEL_PARAMS = dict(loss="poisson", max_iter=300, learning_rate=0.05, max_leaf_nodes=31,
-                    min_samples_leaf=20, l2_regularization=1.0, early_stopping=False, random_state=0)
-FEATURES = ["lat", "lon", "week_sin", "week_cos", "clim_cell", "clim_cell_all", "clim_region"]
-SMOOTH_WEEKS = 2
-MIN_LOG_RATIO_SD = 0.10
+CLASSIFIER_PARAMS = dict(max_iter=200, learning_rate=0.05, min_samples_leaf=40,
+                         l2_regularization=1.0, early_stopping=False, random_state=0)
+FEATURES = ["latitude", "longitude", "doy", "night", "log_frp"]
+CROSS_FIT_FOLDS = 5
+BLOCK_DEG = 0.2
+P_CLIP = (1e-6, 0.999)
 
 
-def week_of(d: date) -> int:
-    return (d.timetuple().tm_yday - 1) // 7
+def _prepare(df: pd.DataFrame) -> pd.DataFrame:
+    d = df.copy()
+    d["year"] = [x.year for x in d["acq_date"]]
+    d["month"] = [x.month for x in d["acq_date"]]
+    d["doy"] = [x.timetuple().tm_yday for x in d["acq_date"]]
+    d["night"] = (d["daynight"] == "N").astype(int)
+    d["log_frp"] = np.log1p(d["frp"])
+    return d
 
 
-class Grid:
-    """FRP summed per (year, week, cell) as a dense array F[year, week, i, j]."""
-
-    def __init__(self, df: pd.DataFrame, case, years):
-        self.case, self.years = case, list(years)
-        w, s, e, n = case.bbox
-        g = case.grid_deg
-        self.ni = max(1, int(np.ceil((n - s) / g)))
-        self.nj = max(1, int(np.ceil((e - w) / g)))
-        self.lat = s + (np.arange(self.ni) + 0.5) * g
-        self.lon = w + (np.arange(self.nj) + 0.5) * g
-        windows = {y: case.window_for_year(y, 21) for y in self.years}
-        self.w0 = min(week_of(a) for a, _ in windows.values())
-        self.w1 = max(week_of(b) for _, b in windows.values())
-        self.nw = self.w1 - self.w0 + 1
-        self.F = np.zeros((len(self.years), self.nw, self.ni, self.nj))
-
-        d = df.copy()
-        d["y"] = [x.year for x in d["acq_date"]]
-        d = d[d["y"].isin(self.years)]
-        yi = d["y"].map({y: k for k, y in enumerate(self.years)}).to_numpy()
-        wi = np.array([week_of(x) for x in d["acq_date"]], dtype=int) - self.w0
-        ii = np.floor((d["latitude"].to_numpy() - s) / g).astype(int)
-        jj = np.floor((d["longitude"].to_numpy() - w) / g).astype(int)
-        ok = (wi >= 0) & (wi < self.nw) & (ii >= 0) & (ii < self.ni) & (jj >= 0) & (jj < self.nj)
-        np.add.at(self.F, (yi[ok], wi[ok], ii[ok], jj[ok]), d["frp"].to_numpy()[ok])
-
-        # smoothed over +/- SMOOTH_WEEKS for climatology features
-        self.Fs = np.zeros_like(self.F)
-        for k in range(self.nw):
-            a, b = max(0, k - SMOOTH_WEEKS), min(self.nw, k + SMOOTH_WEEKS + 1)
-            self.Fs[:, k] = self.F[:, a:b].mean(axis=1)
-
-    def yidx(self, y):
-        return self.years.index(y)
-
-    def period_weights(self, year: int) -> np.ndarray:
-        """Fraction of each week's 7 days that falls inside the case period in this year."""
-        s, e = self.case.window_for_year(year)
-        wts = np.zeros(self.nw)
-        d = s
-        while d <= e:
-            k = week_of(d) - self.w0
-            if 0 <= k < self.nw:
-                wts[k] += 1 / 7
-            d += timedelta(days=1)
-        return wts
-
-    def rows(self, year: int, clim_years) -> pd.DataFrame:
-        """Feature rows for every (week, cell) of `year`, climatology from `clim_years` only."""
-        clim_years = [c for c in clim_years if c != year]
-        ci = [self.yidx(c) for c in clim_years]
-        clim_cell = self.Fs[ci].mean(axis=0)                     # (nw, ni, nj)
-        clim_all = self.F[ci].mean(axis=(0, 1))                  # (ni, nj)
-        clim_region = self.Fs[ci].mean(axis=(0, 2, 3))           # (nw,)
-        K, I, J = np.meshgrid(np.arange(self.nw), np.arange(self.ni), np.arange(self.nj), indexing="ij")
-        weeks = K + self.w0
-        out = pd.DataFrame({
-            "k": K.ravel(), "i": I.ravel(), "j": J.ravel(),
-            "lat": self.lat[I.ravel()], "lon": self.lon[J.ravel()],
-            "week_sin": np.sin(2 * np.pi * weeks.ravel() / 52), "week_cos": np.cos(2 * np.pi * weeks.ravel() / 52),
-            "clim_cell": clim_cell.ravel(), "clim_cell_all": clim_all[I.ravel(), J.ravel()],
-            "clim_region": clim_region[K.ravel()],
-            "y": self.F[self.yidx(year)].ravel(),
-        })
-        return out
-
-
-def _fit(grid: Grid, train_years):
-    X = pd.concat([grid.rows(y, train_years) for y in train_years], ignore_index=True)
-    m = HistGradientBoostingRegressor(**MODEL_PARAMS)
-    m.fit(X[FEATURES], X["y"])
-    return m
-
-
-def _expected(grid: Grid, model, year, clim_years):
-    R = grid.rows(year, clim_years)
-    pred = np.clip(model.predict(R[FEATURES]), 0, None)
-    w = grid.period_weights(year)[R["k"].to_numpy()]
-    return R, pred, w
-
-
-def observed_in_period(df: pd.DataFrame, case, year: int) -> float:
+def _in_period(d: pd.DataFrame, case, year: int) -> pd.DataFrame:
     s, e = case.window_for_year(year)
-    m = (df["acq_date"] >= s) & (df["acq_date"] <= e)
-    return float(df.loc[m, "frp"].sum())
+    return d[(d["year"] == year) & (d["acq_date"] >= s) & (d["acq_date"] <= e)]
+
+
+def _blocks(t: pd.DataFrame) -> np.ndarray:
+    i = np.floor(t["latitude"].to_numpy() / BLOCK_DEG).astype(np.int64)
+    j = np.floor(t["longitude"].to_numpy() / BLOCK_DEG).astype(np.int64)
+    return (i * 1000 + j) % CROSS_FIT_FOLDS
+
+
+def unexplained_share(target: pd.DataFrame, reference: pd.DataFrame) -> np.ndarray:
+    """For each target fire, the share of its FRP that the reference (peacetime) pattern can't explain.
+
+    Cross-fitting holds out one set of spatial blocks at a time, removing BOTH the target and
+    the reference fires in those blocks from training. Fires in a held-out block are scored
+    from the surrounding pattern only, so the model can't memorise local clusters, and it
+    isn't biased by seeing only one class inside the block.
+    """
+    if len(target) == 0 or len(reference) == 0:
+        return np.zeros(len(target))
+    tb, rb = _blocks(target), _blocks(reference)
+    p = np.zeros(len(target))
+    for k in range(CROSS_FIT_FOLDS):
+        test = tb == k
+        if not test.any():
+            continue
+        tr, ref = target[~test], reference[rb != k]
+        if len(tr) == 0 or len(ref) == 0:
+            continue
+        X = np.vstack([tr[FEATURES].to_numpy(), ref[FEATURES].to_numpy()])
+        y = np.r_[np.ones(len(tr)), np.zeros(len(ref))]
+        w = np.r_[np.ones(len(tr)), np.full(len(ref), len(tr) / len(ref))]   # balanced classes
+        m = HistGradientBoostingClassifier(**CLASSIFIER_PARAMS)
+        m.fit(X, y, sample_weight=w)
+        p[test] = m.predict_proba(target[test][FEATURES].to_numpy())[:, 1]
+    p = np.clip(p, *P_CLIP)
+    return np.clip(1.0 - (1.0 - p) / p, 0.0, 1.0)
+
+
+def _envelope(d: pd.DataFrame, case, base, target_year) -> dict:
+    """Per grid cell and month: FRP above the cell's highest value in the reference years."""
+    w, s = case.bbox[0], case.bbox[1]
+    g = case.grid_deg
+    rows = []
+    for y in base + [target_year]:
+        t = _in_period(d, case, y)
+        rows.append(pd.DataFrame({"y": y, "i": np.floor((t["latitude"] - s) / g).astype(int),
+                                  "j": np.floor((t["longitude"] - w) / g).astype(int),
+                                  "m": t["month"], "frp": t["frp"]}))
+    a = pd.concat(rows).pivot_table(index=["i", "j", "m"], columns="y", values="frp", aggfunc="sum", fill_value=0.0)
+    for y in base + [target_year]:
+        if y not in a.columns:
+            a[y] = 0.0
+
+    def excess(year, refs):
+        return float(np.clip(a[year] - a[refs].max(axis=1), 0, None).sum())
+
+    war = [excess(target_year, [b for b in base if b != h]) for h in base]
+    false = [excess(h, [b for b in base if b != h]) for h in base]
+    return {"method": "per-cell envelope (grid cell x month above the reference-year maximum)",
+            "conflict_excess_frp_mw": sig(float(np.mean(war))),
+            "peacetime_false_excess_frp_mw": [sig(f) for f in false],
+            "net_excess_frp_mw": sig(float(np.mean(war) - np.mean(false)))}
 
 
 def run(df: pd.DataFrame, case) -> dict:
-    """df: filtered detections. Returns everything the Monte Carlo and the report need."""
-    target = case.period_start.year
+    """df: filtered detections. Returns the excess spread for the Monte Carlo plus report sections."""
+    target_year = case.period_start.year
     base = sorted(case.baseline_years)
-    grid = Grid(df, case, base + [target])
+    d = _prepare(df)
+    by_year = {y: _in_period(d, case, y) for y in base + [target_year]}
+    T = by_year[target_year]
 
-    # leave-one-year-out validation on peacetime years
-    validation = []
+    war, false, share = [], [], np.zeros(len(T))
     for h in base:
-        train = [y for y in base if y != h]
-        model = _fit(grid, train)
-        _, pred, w = _expected(grid, model, h, train)
-        exp_h = float((pred * w).sum())
-        obs_h = observed_in_period(df, case, h)
-        validation.append({"year": h, "observed_frp_mw": sig(obs_h), "expected_frp_mw": sig(exp_h),
-                           "ratio": sig(obs_h / exp_h) if exp_h > 0 else None})
+        refs = [b for b in base if b != h]
+        ref_df = pd.concat([by_year[r] for r in refs])
+        w = unexplained_share(T, ref_df)
+        war.append(float((T["frp"].to_numpy() * w).sum()))
+        share += w / len(base)
+        f = unexplained_share(by_year[h], ref_df)
+        false.append(float((by_year[h]["frp"].to_numpy() * f).sum()))
 
-    ratios = [v["ratio"] for v in validation if v["ratio"]]
-    if len(ratios) < 2:
-        raise RuntimeError("baseline years have too little fire activity to calibrate the model")
-    logr = np.log(ratios)
-    mu, sd = float(np.mean(logr)), max(float(np.std(logr, ddof=1)), MIN_LOG_RATIO_SD)
+    # rounded before use so tiny cross-platform differences don't move the results
+    war = [sig(x) for x in war]
+    false = [sig(x) for x in false]
 
-    model = _fit(grid, base)
-    R, pred, w = _expected(grid, model, target, base)
-    expected_raw = float((pred * w).sum())
-    observed = observed_in_period(df, case, target)
-    expected_central = expected_raw * np.exp(mu)
-
-    # per-cell excess for the map
-    obs_cell = grid.F[grid.yidx(target)].ravel() * w
-    exp_cell = pred * w * np.exp(mu)
-    R = R.assign(excess=obs_cell - exp_cell)
-    cells = R.groupby(["i", "j"], as_index=False)["excess"].sum()
+    ex = T.assign(excess=T["frp"].to_numpy() * share)
+    g = case.grid_deg
+    w0, s0 = case.bbox[0], case.bbox[1]
+    cells = (ex.assign(i=np.floor((ex["latitude"] - s0) / g).astype(int), j=np.floor((ex["longitude"] - w0) / g).astype(int))
+               .groupby(["i", "j"], as_index=False)["excess"].sum())
     cells = cells[cells["excess"] > 0].sort_values(["excess", "i", "j"], ascending=[False, True, True]).head(40)
-    hotspots = [{"lat": round(float(grid.lat[r.i]), 4), "lon": round(float(grid.lon[r.j]), 4),
+    hotspots = [{"lat": round(s0 + (r.i + 0.5) * g, 4), "lon": round(w0 + (r.j + 0.5) * g, 4),
                  "excess_frp_mw": sig(float(r.excess))} for r in cells.itertuples()]
+    by_month = [{"month": int(m), "observed_frp_mw": sig(float(v.frp.sum())), "excess_frp_mw": sig(float(v.excess.sum()))}
+                for m, v in ex.groupby("month")]
 
+    observed = float(T["frp"].sum())
     return {
-        "observed_frp_mw": observed,
-        "expected_frp_mw_raw": expected_raw,
-        "log_ratio_mu": mu,
-        "log_ratio_sd": sd,
+        "conflict_excess": war,
+        "peacetime_false_excess": false,
         "summary": {
-            "model": "HistGradientBoostingRegressor (Poisson loss), cell-week FRP",
-            "model_params": MODEL_PARAMS,
+            "method": "AI pattern attribution: cross-fitted gradient-boosted classifier, conflict year vs peacetime years",
+            "classifier_params": CLASSIFIER_PARAMS,
             "features": FEATURES,
-            "grid_deg": case.grid_deg,
+            "cross_fit": {"folds": CROSS_FIT_FOLDS, "block_deg": BLOCK_DEG},
             "baseline_years": base,
-            "peacetime_validation": validation,
-            "calibration_log_ratio": {"mean": sig(mu), "sd": sig(sd)},
             "observed_frp_mw": sig(observed),
-            "expected_frp_mw_central": sig(expected_central),
-            "excess_share_central": sig(max(0.0, 1 - expected_central / observed)) if observed > 0 else 0.0,
+            "conflict_excess_by_reference_set": [{"left_out": h, "excess_frp_mw": v} for h, v in zip(base, war)],
+            "peacetime_check": [{"year": h, "observed_frp_mw": sig(float(by_year[h]["frp"].sum())), "false_excess_frp_mw": v}
+                                for h, v in zip(base, false)],
+            "net_excess_frp_mw_central": sig(max(0.0, float(np.mean(war) - np.mean(false)))),
+            "excess_by_month": by_month,
+            "envelope_crosscheck": _envelope(d, case, base, target_year),
         },
         "hotspots": hotspots,
     }

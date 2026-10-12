@@ -5,7 +5,7 @@ report hash. Values marked VERIFY should be checked against the cited source bef
 any public submission.
 """
 
-METHOD_VERSION = "uncounted-frp/0.1.0"
+METHOD_VERSION = "uncounted-frp/0.2.0"
 
 # Fire radiative energy (MJ) -> dry matter burned (kg).
 # Wooster et al. (2005), JGR Atmospheres, 110, D24311: 0.368 +/- 0.015 kg/MJ.
@@ -13,14 +13,14 @@ COMBUSTION_FACTOR_KG_PER_MJ = {"mean": 0.368, "sd": 0.015,
                                "source": "Wooster et al. 2005, JGR 110, D24311"}
 
 # Emission factors, g of gas per kg of dry matter burned (mean, sd).
-# Andreae & Merlet (2001), as tabulated in IPCC 2006 Guidelines Vol.4 Ch.2 Table 2.5. VERIFY.
+# Means: IPCC 2006 Guidelines Vol.4 Ch.2 Table 2.5 (checked). SDs: Andreae & Merlet (2001), VERIFY.
 EMISSION_FACTORS_G_PER_KG = {
     "extratropical_forest": {"CO2": (1569, 131), "CH4": (4.7, 1.9), "N2O": (0.26, 0.07)},
     "savanna_grassland":    {"CO2": (1613, 95),  "CH4": (2.3, 0.9), "N2O": (0.21, 0.10)},
     "agricultural_residue": {"CO2": (1515, 177), "CH4": (2.7, 0.9), "N2O": (0.07, 0.03)},
     "tropical_forest":      {"CO2": (1580, 90),  "CH4": (6.8, 2.0), "N2O": (0.20, 0.10)},
 }
-EMISSION_FACTORS_SOURCE = "Andreae & Merlet 2001; IPCC 2006 GL Vol.4 Ch.2 Table 2.5 (VERIFY)"
+EMISSION_FACTORS_SOURCE = "IPCC 2006 GL Vol.4 Ch.2 Table 2.5 (means); Andreae & Merlet 2001 (SDs)"
 
 # 100-year global warming potentials, IPCC AR6 WG1 Ch.7 Table 7.15 (non-fossil CH4). VERIFY.
 GWP100 = {"CO2": 1.0, "CH4": 27.0, "N2O": 273.0}

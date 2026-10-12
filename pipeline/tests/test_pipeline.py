@@ -95,9 +95,16 @@ def test_conflict_attribution_recovers_injected_fires():
         return d.loc[m, "frp"].sum()
     truth = period_frp(with_war) - period_frp(without)
     snap, _ = write_snapshot(with_war, c.case_id)
-    ex = build_report(c, snap)["result"]["excess_frp_mw"]
-    assert ex["p05"] <= truth * 1.15 and truth <= ex["p95"] * 1.15, (truth, ex)
-    assert abs(ex["p50"] - truth) / truth < 0.35, (truth, ex)
+    r = build_report(c, snap)
+    ex = r["result"]["excess_frp_mw"]
+    # conservative by design: recovers most of the injected fire, never invents much more
+    assert 0.6 * truth <= ex["p50"] <= 1.15 * truth, (truth, ex)
+    assert ex["p05"] <= ex["p50"] <= ex["p95"]
+    # the strongest hotspot sits on the injected front line (diagonal through the box)
+    h = r["hotspots"][0]
+    w, s, e, n = c.bbox
+    t_lat, t_lon = (h["lat"] - s) / (n - s), (h["lon"] - w) / (e - w)
+    assert abs((t_lat - 0.2) / 0.6 - (t_lon - 0.15) / 0.5) < 0.35, h
 
 
 def test_peacetime_year_shows_little_excess():
@@ -105,6 +112,29 @@ def test_peacetime_year_shows_little_excess():
     snap, _ = write_snapshot(generate(c, frontline=False), c.case_id)
     r = build_report(c, snap)
     observed = r["attribution"]["observed_frp_mw"]
-    assert r["result"]["excess_frp_mw"]["p50"] < 0.25 * observed, r["result"]
-    for v in r["attribution"]["peacetime_validation"]:
-        assert 0.5 < v["ratio"] < 2.0
+    assert r["result"]["excess_frp_mw"]["p50"] < 0.10 * observed, r["result"]
+    assert len(r["attribution"]["peacetime_check"]) == 5
+
+
+def test_verify_tolerance_rules():
+    from copy import deepcopy
+    from uncounted.verify import compare_reports
+    c = wildfire_case()
+    snap, _ = write_snapshot(generate(c), "t-verify")
+    rep = build_report(c, snap)
+    assert compare_reports(rep, deepcopy(rep)) == []
+    small = deepcopy(rep); small["result"]["tco2e"]["p50"] = int(rep["result"]["tco2e"]["p50"] * 1.02)
+    assert compare_reports(rep, small) == []                       # 2 % drift: same result
+    big = deepcopy(rep); big["result"]["tco2e"]["p50"] = int(rep["result"]["tco2e"]["p50"] * 1.2)
+    assert any("tco2e.p50" in d for d in compare_reports(rep, big))  # 20 %: not reproduced
+    changed = deepcopy(rep); changed["method"]["monte_carlo"]["seed"] += 1
+    assert any("seed" in d for d in compare_reports(rep, changed))   # inputs must be identical
+
+
+def test_burned_area_crosscheck_units():
+    c = wildfire_case()
+    c.crosscheck = {"burned_area_ha": [1000, 1000], "fuel_consumed_t_per_ha": [20, 20]}
+    snap, _ = write_snapshot(generate(c), "t-cc")
+    cc = build_report(c, snap)["crosscheck"]
+    # 20,000 t dry matter x (1569 + 27*4.7 + 273*0.26) g/kg = about 36,300 t CO2e
+    assert 30000 < cc["tco2e"]["p50"] < 43000, cc

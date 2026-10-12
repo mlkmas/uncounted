@@ -356,15 +356,19 @@ function renderReport(rep, kind) {
       <dt>By gas (median)</dt><dd>CO2 ${fmtT(gas.CO2).replace(" CO2e","")}, CH4 ${Number(gas.CH4).toLocaleString()} t, N2O ${Number(gas.N2O).toLocaleString()} t</dd>
     </dl></section>`;
   if (att) {
-    html += `<section class="block"><h2>Above the peacetime baseline</h2>
-      <p class="rec-meta" style="margin-top:0">A model trained on ${att.baseline_years[0]} to ${att.baseline_years.at(-1)} predicts normal fire activity. Each row hides one peacetime year and predicts it.</p>
-      <table class="val"><thead><tr><th>Held-out year</th><th>Observed</th><th>Predicted</th><th>Ratio</th></tr></thead><tbody>
-      ${att.peacetime_validation.map((v) => `<tr><td>${v.year}</td><td>${Number(v.observed_frp_mw).toLocaleString()}</td><td>${Number(v.expected_frp_mw).toLocaleString()}</td><td>${v.ratio}</td></tr>`).join("")}
+    const env = att.envelope_crosscheck;
+    const pct = Math.round((att.net_excess_frp_mw_central / att.observed_frp_mw) * 100);
+    html += `<section class="block"><h2>Fires unlike any peacetime fire</h2>
+      <p class="rec-meta" style="margin-top:0">An AI classifier learns what fires looked like in ${att.baseline_years[0]} to ${att.baseline_years.at(-1)}: where, when, day or night, how intense. It then measures how much 2022 fire doesn't fit that pattern. The same test run on each peacetime year shows how much it flags by chance, and that noise is subtracted.</p>
+      <table class="val"><thead><tr><th>Peacetime year tested</th><th>Fire power</th><th>Flagged by chance</th></tr></thead><tbody>
+      ${att.peacetime_check.map((v) => `<tr><td>${v.year}</td><td>${Number(v.observed_frp_mw).toLocaleString()} MW</td><td>${Number(v.false_excess_frp_mw).toLocaleString()} MW</td></tr>`).join("")}
       </tbody></table>
-      <p class="rec-meta">In the conflict period, about ${Math.round(att.excess_share_central * 100)}% of observed fire power was above the baseline.</p></section>`;
+      <p class="rec-meta">After subtracting that noise, about ${Number(att.net_excess_frp_mw_central).toLocaleString()} MW, ${pct}% of the fire power observed in the period, doesn't fit peacetime patterns.
+      ${env ? `A simpler, independent check (each grid cell compared with its own peacetime maximum) gives ${Number(env.net_excess_frp_mw).toLocaleString()} MW.` : ""}</p></section>`;
   } else {
     html += `<section class="block"><h2>How it's estimated</h2><p class="rec-meta" style="margin-top:0">Satellite fire radiative power is integrated over time, converted to burned biomass, then to gases with published emission factors. 20,000 Monte Carlo draws give the range.</p>`;
-    if (cc) html += `<p><strong>Independent cross-check</strong> from burned area: ${fmtT(cc.tco2e.p05)} to ${fmtT(cc.tco2e.p95)}.</p>`;
+    if (cc) html += `<p><strong>Independent cross-check</strong> from mapped burned area: ${fmtT(cc.tco2e.p05)} to ${fmtT(cc.tco2e.p95)}, median ${fmtT(cc.tco2e.p50)}.</p>
+      ${cc.inputs && cc.inputs.sources ? `<ul class="notes">${cc.inputs.sources.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}`;
     html += `</section>`;
   }
   html += `</div><section class="block"><h2>Limits of this estimate</h2><ul class="notes">${rep.notes.map((n) => `<li>${esc(n)}</li>`).join("")}</ul></section>`;

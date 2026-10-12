@@ -2,7 +2,7 @@
 //
 //   npx hardhat deploy-ledger                    --network localhost
 //   npx hardhat publish-report --report reports/manavgat-2021.json [--revise]
-//   npx hardhat attest --id 1 --report reports/reproduced/manavgat-2021.json --signer 2
+//   npx hardhat attest --id 1 --verification reports/reproduced/manavgat-2021.verification.json --signer 2
 //   npx hardhat dispute --id 1 --evidence notes.txt --reason "could not reproduce" --signer 3
 //   npx hardhat list-records
 //
@@ -114,22 +114,29 @@ task("publish-report", "Publish a pipeline report to the ledger")
     console.log(`tCO2e ${input.tco2eLow} .. ${input.tco2eCentral} .. ${input.tco2eHigh}`);
   });
 
-task("attest", "As a verifier, attest that you reproduced a record's report")
+task("attest", "As a verifier, attest a record you reproduced with `uncounted verify`")
   .addParam("id", "Record id", undefined, types.int)
-  .addParam("report", "Your independently reproduced report file")
+  .addParam("verification", "reports/reproduced/<case>.verification.json written by `uncounted verify`")
   .addOptionalParam("signer", "Signer index", undefined, types.int)
   .setAction(async (args, hre) => {
     const ledger = await loadLedger(hre);
     const signer = await signerFor(hre, "verifier", args.signer);
-    const reproduced = sha256File(path.resolve(ROOT, args.report));
-    const rec = await ledger.getRecord(args.id);
-    if (reproduced !== rec.reportHash) {
-      console.log(`Hash mismatch: on chain ${rec.reportHash}, reproduced ${reproduced}. Consider a dispute.`);
+    const v = JSON.parse(fs.readFileSync(path.resolve(ROOT, args.verification), "utf8"));
+    if (!["bit_exact", "within_tolerance"].includes(v.verdict)) {
+      console.log(`Verification verdict is "${v.verdict}". Not attesting; consider a dispute instead.`);
       process.exitCode = 1;
       return;
     }
-    await (await ledger.connect(signer).attest(args.id, reproduced)).wait();
-    console.log(`Attested record #${args.id} as ${signer.address}. Status: ${STATUS[Number(await ledger.status(args.id))]}`);
+    const rec = await ledger.getRecord(args.id);
+    const local = sha256File(path.resolve(ROOT, v.report));
+    if (local !== v.published_hash || rec.reportHash !== v.published_hash) {
+      console.log(`Hash mismatch: on chain ${rec.reportHash}, verified file ${v.published_hash}, file now ${local}.`);
+      process.exitCode = 1;
+      return;
+    }
+    await (await ledger.connect(signer).attest(args.id, v.published_hash)).wait();
+    console.log(`Attested record #${args.id} (${v.verdict.replace("_", " ")}) as ${signer.address}. ` +
+      `Status: ${STATUS[Number(await ledger.status(args.id))]}`);
   });
 
 task("dispute", "As a verifier, dispute a record")

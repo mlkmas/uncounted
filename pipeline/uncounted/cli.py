@@ -74,30 +74,24 @@ def cmd_estimate(a):
     print(f"Report:      {rel(path)}\nreportHash:  {digest}\n"
           f"tCO2e:       {t['p05']:,} .. {t['p50']:,} .. {t['p95']:,}  (5th / median / 95th pct)")
     if "attribution" in report:
-        print("Peacetime check (observed / expected):",
-              ", ".join(f"{v['year']}: {v['ratio']}" for v in report["attribution"]["peacetime_validation"]))
+        a = report["attribution"]
+        print(f"Fire power unlike peacetime fires: {a['net_excess_frp_mw_central']:,.0f} MW "
+              f"of {a['observed_frp_mw']:,.0f} MW observed")
+        print("Peacetime false alarms (MW):",
+              ", ".join(f"{v['year']}: {v['false_excess_frp_mw']:,.0f}" for v in a["peacetime_check"]))
 
 
 def cmd_verify(a):
-    from .pipeline import build_report, write_report
-    published = Path(a.report)
-    original = json.loads(published.read_bytes())
-    case = case_from_report(original)
-    snap = Path(original["data"]["snapshot_file"])
-    if not snap.is_absolute():
-        from .canonical import ROOT
-        snap = ROOT / snap
-    result = {"report": rel(published), "published_hash": sha256_file(published)}
-    snap_hash = sha256_file(snap) if snap.exists() else None
-    result["data_hash_ok"] = snap_hash == original["data"]["snapshot_sha256"]
-    if not result["data_hash_ok"]:
-        result.update(match=False, reason="data snapshot missing or altered")
-    else:
-        out = REPORT_DIR / "reproduced" / published.name
-        _, reproduced = write_report(build_report(case, snap), out)
-        result.update(reproduced_hash=reproduced, reproduced_file=rel(out), match=reproduced == result["published_hash"])
-    print(json.dumps(result, indent=2))
-    sys.exit(0 if result["match"] else 1)
+    from .verify import verify, write_verification
+    result = verify(Path(a.report))
+    path = write_verification(result)
+    print(json.dumps({k: v for k, v in result.items() if k not in ("verifier_environment", "published_environment")}, indent=2))
+    labels = {"bit_exact": "Reproduced bit for bit.",
+              "within_tolerance": "Reproduced: same inputs, results within tolerance.",
+              "not_reproduced": "NOT reproduced. Do not attest; consider a dispute."}
+    print(labels[result["verdict"]])
+    print(f"Verification record: {rel(path)}")
+    sys.exit(0 if result["verdict"] != "not_reproduced" else 1)
 
 
 def cmd_hash(a):

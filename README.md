@@ -65,8 +65,8 @@ npx hardhat publish-report --report reports/kherson-2022.json --network localhos
 
 # 3. independent verification
 (cd pipeline && python -m uncounted verify ../reports/manavgat-2021.json)
-npx hardhat attest --id 1 --report reports/reproduced/manavgat-2021.json --signer 2 --network localhost
-npx hardhat attest --id 1 --report reports/reproduced/manavgat-2021.json --signer 3 --network localhost
+npx hardhat attest --id 1 --verification reports/reproduced/manavgat-2021.verification.json --signer 2 --network localhost
+npx hardhat attest --id 1 --verification reports/reproduced/manavgat-2021.verification.json --signer 3 --network localhost
 
 # 4. dashboard
 python3 -m http.server 8000      # then open http://localhost:8000/web/
@@ -86,7 +86,7 @@ export PUBLIC_RPC_URL=https://...     # read-only RPC the dashboard can use
 export EXPLORER_URL=https://sepolia.etherscan.io
 npx hardhat deploy-ledger --network sepolia
 npx hardhat publish-report --report reports/manavgat-2021.json --network sepolia
-npx hardhat attest --id 1 --report reports/reproduced/manavgat-2021.json --signer 1 --network sepolia
+npx hardhat attest --id 1 --verification reports/reproduced/manavgat-2021.verification.json --signer 1 --network sepolia
 ```
 
 Commit `reports/` and `data/snapshots/` so verifiers can re-run; GitHub Pages can then host the dashboard at `/web/`.

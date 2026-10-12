@@ -12,8 +12,9 @@ import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 ///           2. The same raw satellite data snapshot cannot back two active records.
 ///           3. A report hash can be recorded only once.
 ///         Trust: independent verifiers re-run the open pipeline on the same data and
-///         attest that they reproduced the exact report hash. Publishers cannot
-///         verify their own records.
+///         attest to the exact report hash they reproduced (inputs identical, results
+///         bit-exact or within the published tolerance). Publishers cannot verify
+///         their own records.
 contract EmissionsLedger is AccessControl {
     bytes32 public constant PUBLISHER_ROLE = keccak256("PUBLISHER_ROLE");
     bytes32 public constant VERIFIER_ROLE = keccak256("VERIFIER_ROLE");
@@ -117,7 +118,7 @@ contract EmissionsLedger is AccessControl {
         emit RecordRevised(oldId, id);
     }
 
-    /// @notice A verifier re-ran the pipeline on the published data and got this hash.
+    /// @notice A verifier re-ran the pipeline on the published data and confirms the report with this hash.
     function attest(uint256 id, bytes32 reproducedHash) external onlyRole(VERIFIER_ROLE) {
         Record storage r = _vote(id);
         if (reproducedHash != r.reportHash) revert HashMismatch(r.reportHash, reproducedHash);

@@ -31,9 +31,9 @@ echo "== Independent verifiers re-run the pipeline and attest"
 (cd pipeline
  python3 -m uncounted verify ../reports/synthetic-manavgat-2021.json
  python3 -m uncounted verify ../reports/synthetic-kherson-2022.json)
-npx hardhat attest --id 1 --report reports/reproduced/synthetic-manavgat-2021.json --signer 2 --network localhost
-npx hardhat attest --id 1 --report reports/reproduced/synthetic-manavgat-2021.json --signer 3 --network localhost
-npx hardhat attest --id 2 --report reports/reproduced/synthetic-kherson-2022.json --signer 2 --network localhost
+npx hardhat attest --id 1 --verification reports/reproduced/synthetic-manavgat-2021.verification.json --signer 2 --network localhost
+npx hardhat attest --id 1 --verification reports/reproduced/synthetic-manavgat-2021.verification.json --signer 3 --network localhost
+npx hardhat attest --id 2 --verification reports/reproduced/synthetic-kherson-2022.verification.json --signer 2 --network localhost
 npx hardhat list-records --network localhost
 
 echo "== Dashboard at http://localhost:8000/web/  (Ctrl+C to stop)"
