@@ -1,0 +1,13 @@
+{
+  "kind": 1,
+  "region": "UA-65 Kherson Oblast",
+  "periodStart": 1646092800,
+  "periodEnd": 1667260799,
+  "tco2eLow": 112000,
+  "tco2eCentral": 358000,
+  "tco2eHigh": 756000,
+  "reportHash": "0x55820a33127fd34daef7508a59d176a49c1c806edadba481286ecd8155ffa659",
+  "dataHash": "0x2f0d9b6f14601dc41ce8f190ecf377e659e764b02978de3ccbbf0b66126d4242",
+  "methodVersion": "uncounted-frp/0.2.0",
+  "reportURI": "reports/kherson-2022.json"
+}

@@ -1,0 +1,13 @@
+{
+  "kind": 0,
+  "region": "TR-07 Antalya, Manavgat area",
+  "periodStart": 1627430400,
+  "periodEnd": 1628812799,
+  "tco2eLow": 994000,
+  "tco2eCentral": 1820000,
+  "tco2eHigh": 2740000,
+  "reportHash": "0x96ff6ffe22554c52bee388cf45524801a91e0b6c31eb65313e78c07158b3a32f",
+  "dataHash": "0x7154f1ad89fa69ca0af969f89a6795499eacf990759ec0576fcb1d0dcaeb69ea",
+  "methodVersion": "uncounted-frp/0.2.0",
+  "reportURI": "reports/manavgat-2021.json"
+}
